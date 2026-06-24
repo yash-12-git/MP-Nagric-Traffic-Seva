@@ -4,7 +4,7 @@ import {
 } from 'react-native';
 import { api } from '../services/api';
 import { useAuth } from '../App';
-import { buildMediaFile } from '../utils/mediaUtils';
+import { buildMediaFile, formatDateTime } from '../utils/mediaUtils';
 import ViolationTypePicker from '../components/ViolationTypePicker';
 
 export default function SubmitScreen({ route, navigation }) {
@@ -80,7 +80,7 @@ export default function SubmitScreen({ route, navigation }) {
       <Text style={styles.value}>📍 {gps ? `${gps.latitude.toFixed(4)}, ${gps.longitude.toFixed(4)}` : 'Not available'}</Text>
 
       <Text style={styles.label}>Date & Time</Text>
-      <Text style={styles.value}>{new Date(incidentTime).toLocaleString('en-IN')}</Text>
+      <Text style={styles.value}>{formatDateTime(incidentTime)}</Text>
 
       <Text style={styles.label}>Violation Type</Text>
       <View style={styles.pickerBox}>

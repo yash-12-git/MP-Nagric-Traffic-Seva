@@ -249,11 +249,29 @@ Pipeline in [ocr-service/plate_reader.py](../ocr-service/plate_reader.py):
 
 1. **If video:** sample every Nth frame, score each by the variance of its Laplacian
    (a sharpness measure), keep the sharpest frame. **If image:** use it directly.
-2. Run **EasyOCR** on the chosen frame.
-3. Keep only tokens matching the Indian plate regex `[A-Z]{2}\d{2}[A-Z]{1,2}\d{4}`
-   (e.g. `MP04AB1234`), strip spaces, upper-case.
-4. Return the highest-confidence match as `best_plate`, plus a downscaled JPEG of the
-   frame as `thumbnail_b64` for the backend to watermark and store.
+2. Run **EasyOCR** at **several downscaled resolutions** (longest side ≤ 1600 / 1000
+   / 640 px) with a plate-character allowlist (`A–Z0–9`). Multiple scales make
+   detection robust, and the smaller scales blur away fine high-contrast textures —
+   notably the repeating "INDIA" hologram printed over high-security (HSRP) plates —
+   that otherwise hide the large embossed characters. The raw camera resolution
+   (e.g. 4080 px) is never OCR'd directly: it is slow and mostly detects the hologram.
+3. Order the detected boxes into reading order (top line L→R, then bottom line),
+   dropping the `IND` country logo, and build candidates from every **contiguous run
+   of 1–3 boxes**. This reassembles a plate split across boxes or **across two lines**
+   (most motorcycles / HSRP plates, e.g. `RJ41S` over `H7917`) while avoiding an
+   overlapping hologram misread of the same region. Each candidate is matched against
+   the Indian format `[A-Z]{2}\d{1,2}[A-Z]{1,2}\d{4}` (e.g. `MP04AB1234`), then run
+   through a **position-aware canonicalisation** that fixes OCR confusions by zone (a
+   `Z`/`L` in the trailing 4-digit block must be `7`/`4`, an `A` must be `4`, an `O`/`I`
+   must be `0`/`1`, …), so `RJA1S`+`H7917` → `RJ41SH7917`.
+4. **Rank** candidates by completeness (a full 10-char plate beats a truncated read),
+   then by recurrence across scales/positions, then OCR confidence. Return the winner
+   as `best_plate` with its confidence, plus a downscaled JPEG of the frame as
+   `thumbnail_b64`. The OCR is a best-effort **assist**: every plate is reviewed and
+   editable by the officer before a challan issues, the confidence is surfaced, and
+   plates OCR genuinely cannot read fall through to manual entry. (Embossed HSRP plates
+   with holographic overlays remain hard; production-grade accuracy needs a dedicated
+   ALPR detector + recognizer, not generic EasyOCR.)
 
 EasyOCR pulls in PyTorch (large, one-time install). The backend never blocks on this:
 the OCR call has a timeout and any failure degrades to manual entry.
@@ -279,7 +297,7 @@ passwords are bcrypt-hashed at seed time (`officer123`).
 |---|---|---|
 | OTP / SMS | `routes/auth.js` | Always `123456`; "sends" via console.log |
 | VAHAN registry | `services/vahanMock.js` | 20 known MP plates + generic fallback |
-| Reverse geocode | `services/helpers.js` | Nearest of a few Bhopal/Indore landmarks |
+| Reverse geocode | `services/helpers.js` | Known MP demo landmarks (offline) → OpenStreetMap Nominatim → raw coords if offline |
 | Challan PDF | `services/challanPdf.js` | Puppeteer HTML→PDF, HTML fallback, QR placeholder |
 | Notifications | `routes/officer.js` | console.log stubs only |
 | File storage | `middleware/upload.js` | Local `/uploads` |

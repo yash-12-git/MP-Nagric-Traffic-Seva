@@ -9,7 +9,7 @@ const { upload, UPLOAD_DIR } = require('../middleware/upload');
 const { hashFile } = require('../services/evidenceHash');
 const { readPlate } = require('../services/ocrService');
 const { lookupVahan } = require('../services/vahanMock');
-const { nextCaseNumber, audit, mockReverseGeocode } = require('../services/helpers');
+const { nextCaseNumber, audit, reverseGeocode } = require('../services/helpers');
 
 const router = express.Router();
 
@@ -68,7 +68,7 @@ router.post('/', requireCitizen, upload.single('media'), async (req, res) => {
     // 6. Reverse geocode (mock).
     const lat = latitude != null ? Number(latitude) : null;
     const lng = longitude != null ? Number(longitude) : null;
-    const locationAddress = mockReverseGeocode(lat, lng);
+    const locationAddress = await reverseGeocode(lat, lng);
 
     // 7. Persist the case.
     const info = db

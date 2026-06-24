@@ -103,43 +103,204 @@ def _normalise_variants(s):
         yield swapped
 
 
-def read_plate(image):
-    """Run EasyOCR and return plate candidates matching the Indian plate pattern.
+# Restrict EasyOCR to the characters that can appear on a plate. This stops it
+# emitting junk tokens ("Dia", "VONI", ...) from backgrounds and holographic
+# "INDIA" watermarks printed over high-security (HSRP) plates.
+PLATE_ALLOWLIST = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
-    Matches per-box AND against the concatenation of all boxes, because EasyOCR
-    often splits a plate across boxes (e.g. "MP04" + "AB1234").
+# OCR confusions resolved BY POSITION. An Indian plate is structured
+# [2 letters][1-2 digits][1-2 letters][4 digits], so we know which zones must be
+# digits and which must be letters. A character read in a digit zone that is really
+# a confusable letter (Z↔7, L↔4, O↔0, ...) is coerced to its digit, and vice-versa.
+_LETTER_TO_DIGIT = {"O": "0", "Q": "0", "D": "0", "I": "1", "J": "1", "L": "4",
+                    "A": "4", "Z": "7", "T": "7", "S": "5", "B": "8", "G": "6"}
+_DIGIT_TO_LETTER = {"0": "O", "1": "I", "2": "Z", "4": "A", "5": "S", "6": "G",
+                    "7": "T", "8": "B"}
+
+
+def _coerce(seg, want):
+    """Coerce a segment to all-letters ('alpha') or all-digits ('digit') using the
+    positional confusion maps. Returns None if a character can't plausibly fit."""
+    out = []
+    for ch in seg:
+        if want == "digit":
+            if ch.isdigit():
+                out.append(ch)
+            elif ch in _LETTER_TO_DIGIT:
+                out.append(_LETTER_TO_DIGIT[ch])
+            else:
+                return None
+        else:  # alpha
+            if ch.isalpha():
+                out.append(ch)
+            elif ch in _DIGIT_TO_LETTER:
+                out.append(_DIGIT_TO_LETTER[ch])
+            else:
+                return None
+    return "".join(out)
+
+
+def _canonicalise_exact(s):
+    """Coerce an exactly-plate-length string (8-10) to canonical form, or None."""
+    if not (8 <= len(s) <= 10):
+        return None
+    # district = 1-2 digits, series = 1-2 letters; prefer the common (2,2) split.
+    for dlen in (2, 1):
+        for slen in (2, 1):
+            if 2 + dlen + slen + 4 != len(s):
+                continue
+            a = _coerce(s[0:2], "alpha")
+            b = _coerce(s[2:2 + dlen], "digit")
+            c = _coerce(s[2 + dlen:2 + dlen + slen], "alpha")
+            d = _coerce(s[2 + dlen + slen:], "digit")
+            if a and b and c and d:
+                return a + b + c + d
+    return None
+
+
+def _canonicalise(s):
+    """Read a cleaned string as a full Indian plate, fixing positional OCR confusions.
+    Returns the canonical plate (e.g. 'UP32FH7224') or None.
+
+    Tries the whole string first, then slides a window so leading/trailing noise —
+    the 'IND' country logo, a stray edge detection — can be shed. e.g. the two-line
+    read 'UP32F'+'HZ224' = 'UP32FHZ224' becomes 'UP32FH7224' (Z in the trailing digit
+    zone must be 7); 'INDUP32FHZ224' is recovered via the window."""
+    direct = _canonicalise_exact(s)
+    if direct:
+        return direct
+    # Slide a plate-length window over longer strings (prefer longer plates).
+    for size in (10, 9, 8):
+        if len(s) <= size:
+            continue
+        for i in range(0, len(s) - size + 1):
+            cand = _canonicalise_exact(s[i:i + size])
+            if cand:
+                return cand
+    return None
+
+
+# Logo / country tokens that appear on plates but are never part of the number.
+_IGNORE_TOKENS = {"IND", "INDIA"}
+
+
+def _ocr_passes(image):
+    """Yield (label, image) grayscale variants to OCR, each downscaled so its longest
+    side is at most the given target width.
+
+    Multiple scales make detection robust: smaller scales blur away fine high-contrast
+    textures — notably the repeating 'INDIA' hologram on HSRP plates — that otherwise
+    dominate detection and hide the large embossed characters. We never run OCR at the
+    raw camera resolution (e.g. 4080px): it is slow and, on holographic plates, mostly
+    detects the watermark."""
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+    h, w = gray.shape[:2]
+    longest = max(h, w)
+    seen_w = set()
+    for target in (1600, 1000, 640):
+        if target >= longest:
+            scale = 1.0
+        else:
+            scale = target / longest
+        nw, nh = int(w * scale), int(h * scale)
+        if min(nw, nh) < 40 or nw in seen_w:
+            continue
+        seen_w.add(nw)
+        out = gray if scale == 1.0 else cv2.resize(gray, (nw, nh), interpolation=cv2.INTER_AREA)
+        yield f"w{nw}", out
+
+
+def _reading_order(results):
+    """Return OCR detections as a flat list of (text, confidence) in reading order
+    (top line left-to-right, then next line), dropping logo tokens (IND/INDIA).
+
+    Boxes are clustered into lines by vertical proximity so a two-line plate reads
+    top-then-bottom. Reading order matters because plate candidates are built from
+    contiguous runs of boxes (see read_plate)."""
+    def y_center(b):
+        return sum(pt[1] for pt in b) / len(b)
+
+    def x_center(b):
+        return sum(pt[0] for pt in b) / len(b)
+
+    def height(b):
+        ys = [pt[1] for pt in b]
+        return max(ys) - min(ys)
+
+    boxes = [r for r in results if _clean(r[1]) not in _IGNORE_TOKENS]
+    if not boxes:
+        return []
+    ordered = sorted(boxes, key=lambda r: y_center(r[0]))
+    median_h = sorted(height(r[0]) for r in ordered)[len(ordered) // 2] or 1
+    lines = []
+    for r in ordered:
+        if lines and abs(y_center(r[0]) - y_center(lines[-1][-1][0])) <= 0.7 * median_h:
+            lines[-1].append(r)
+        else:
+            lines.append([r])
+    flat = []
+    for line in lines:
+        for r in sorted(line, key=lambda r: x_center(r[0])):
+            flat.append((r[1], r[2]))
+    return flat
+
+
+def read_plate(image):
+    """Read Indian plate candidates from a frame.
+
+    Handles single-line AND two-line plates (most motorcycles / HSRP plates), and
+    embossed plates with holographic overlays, by:
+      1. OCR-ing the frame at several scales with a plate-character allowlist;
+      2. building candidates from contiguous runs of 1-3 boxes in reading order, so a
+         plate split across boxes/lines ("RJ41S" + "H7917") is reassembled without
+         pulling in an overlapping hologram misread;
+      3. matching the plate regex, then canonicalising with position-aware confusion
+         correction (Z->7, A->4, ...). Best by confidence wins.
+    Officer-in-the-loop reviews every plate, and the confidence is surfaced.
     """
     reader = get_reader()
-    results = reader.readtext(image)
 
-    plates = []
-    seen = set()
+    # Per distinct plate: how many candidates produced it (votes) and its best conf.
+    votes = {}
+    conf = {}
 
-    def add(text, confidence, bbox=None):
-        for variant in _normalise_variants(_clean(text)):
+    def add(text, confidence):
+        cleaned = _clean(text)
+        cand = None
+        for variant in _normalise_variants(cleaned):   # exact substring match first
             m = PLATE_PATTERN.search(variant)
-            if m and m.group(0) not in seen:
-                seen.add(m.group(0))
-                plates.append({
-                    "text": m.group(0),
-                    "confidence": float(confidence),
-                    "bbox": [int(c) for coord in bbox for c in coord] if bbox else None,
-                })
-                return
+            if m:
+                cand = m.group(0)
+                break
+        if cand is None:                                # else try structural fixup
+            cand = _canonicalise(cleaned)
+        if cand:
+            votes[cand] = votes.get(cand, 0) + 1
+            conf[cand] = max(conf.get(cand, 0.0), confidence)
 
-    # 1. Per-box (keeps an accurate per-detection confidence + bbox).
-    for (bbox, text, confidence) in results:
-        add(text, confidence, bbox)
+    for _label, variant in _ocr_passes(image):
+        results = reader.readtext(variant, allowlist=PLATE_ALLOWLIST)
+        if not results:
+            continue
+        boxes = _reading_order(results)   # [(text, conf), ...] logo tokens dropped
+        n = len(boxes)
+        # Candidates = contiguous runs of 1-3 boxes (a plate spans at most two lines,
+        # each line at most a couple of OCR boxes).
+        for i in range(n):
+            for size in (1, 2, 3):
+                if i + size > n:
+                    break
+                chunk = boxes[i:i + size]
+                joined = "".join(_clean(t) for (t, _) in chunk)
+                mean_conf = sum(c for (_, c) in chunk) / size
+                add(joined, mean_conf)
 
-    # 2. Concatenation of all boxes, left-to-right, to recover split plates.
-    #    Use the mean confidence of the contributing detections as an estimate.
-    if results:
-        joined = "".join(_clean(t) for (_, t, _) in results)
-        mean_conf = sum(c for (_, _, c) in results) / len(results)
-        add(joined, mean_conf)
-
-    # Sort best-first.
-    plates.sort(key=lambda p: p["confidence"], reverse=True)
+    # Rank: prefer the most complete plate (a full 10-char plate beats a truncated
+    # 9-char read that dropped a character), then recurrence across scales/positions,
+    # then OCR confidence.
+    plates = [{"text": p, "confidence": float(conf[p]), "votes": votes[p], "bbox": None}
+              for p in votes]
+    plates.sort(key=lambda p: (len(p["text"]), p["votes"], p["confidence"]), reverse=True)
     return plates
 
 

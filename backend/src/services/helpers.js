@@ -31,9 +31,10 @@ function audit(caseId, actorType, actorId, action, metadata = {}) {
   }
 }
 
-// DEMO ONLY: mock reverse geocoder. Maps a few Bhopal landmarks by proximity,
-// otherwise returns a generic MP address from the coordinates.
-// SWAP-TO-PRODUCTION: call a real reverse-geocoding API (e.g. Nominatim/Google).
+const axios = require('axios');
+
+// Known MP demo landmarks — an OFFLINE shortcut so the scripted Bhopal/Indore demo
+// shows nice names without a network call.
 const LANDMARKS = [
   { name: 'Near Roshanpura Square, Bhopal', lat: 23.2563, lng: 77.4009 },
   { name: 'MP Nagar Zone-1, Bhopal', lat: 23.2329, lng: 77.4343 },
@@ -42,19 +43,44 @@ const LANDMARKS = [
   { name: 'Vijay Nagar Square, Indore', lat: 22.7533, lng: 75.8937 },
 ];
 
-function mockReverseGeocode(lat, lng) {
+// Reverse geocode coordinates to a human address.
+//   1. If near a known MP demo landmark, return its name (offline, instant).
+//   2. Otherwise call OpenStreetMap Nominatim (free, no key, same data as the map).
+//   3. If that fails (offline / rate-limited), return the raw coordinates WITHOUT
+//      fabricating a state — never assert a wrong location on a challan.
+// SWAP-TO-PRODUCTION: use a paid/self-hosted geocoder (Google, MapmyIndia, or a
+// self-hosted Nominatim) for reliability and higher rate limits.
+async function reverseGeocode(lat, lng) {
   if (lat == null || lng == null) return 'Location not available';
+
   let best = null;
   let bestD = Infinity;
   for (const l of LANDMARKS) {
     const d = Math.hypot(l.lat - lat, l.lng - lng);
-    if (d < bestD) {
-      bestD = d;
-      best = l;
-    }
+    if (d < bestD) { bestD = d; best = l; }
   }
   if (best && bestD < 0.05) return best.name;
-  return `Lat ${Number(lat).toFixed(4)}, Lng ${Number(lng).toFixed(4)}, Madhya Pradesh`;
+
+  try {
+    const res = await axios.get('https://nominatim.openstreetmap.org/reverse', {
+      params: { lat, lon: lng, format: 'json', zoom: 16, addressdetails: 1 },
+      headers: { 'User-Agent': 'MP-Nagrik-Traffic-Seva/0.1 (demo)' },
+      timeout: 4000,
+    });
+    const a = res.data && res.data.address;
+    if (a) {
+      const parts = [
+        a.suburb || a.neighbourhood || a.road || a.village || a.town || a.city_district,
+        a.city || a.town || a.county,
+        a.state,
+      ].filter(Boolean);
+      if (parts.length) return parts.join(', ');
+    }
+    if (res.data && res.data.display_name) return res.data.display_name;
+  } catch (err) {
+    console.warn('[geocode] reverse lookup failed, returning coordinates:', err.message);
+  }
+  return `Lat ${Number(lat).toFixed(4)}, Lng ${Number(lng).toFixed(4)}`;
 }
 
-module.exports = { nextCaseNumber, nextChallanNumber, audit, mockReverseGeocode };
+module.exports = { nextCaseNumber, nextChallanNumber, audit, reverseGeocode };
