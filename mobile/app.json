@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "MP Nagrik Traffic Seva",
+    "slug": "mp-traffic-seva",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#0b3d91"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSCameraUsageDescription": "Used to capture traffic violation evidence.",
+        "NSLocationWhenInUseUsageDescription": "Used to tag the location of a reported violation.",
+        "NSMicrophoneUsageDescription": "Used to record violation video evidence."
+      }
+    },
+    "android": {
+      "permissions": [
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "CAMERA",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "RECORD_AUDIO",
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO",
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION"
+      ],
+      "package": "com.anonymous.mptrafficseva"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow MP Traffic Seva to access your camera to capture evidence."
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow MP Traffic Seva to tag violation locations."
+        }
+      ]
+    ],
+    "extra": {
+      "comment": "DEMO ONLY: set apiBaseUrl in src/services/api.js to your machine's LAN IP for a real device."
+    }
+  }
+}

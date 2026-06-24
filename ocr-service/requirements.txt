@@ -1,0 +1,9 @@
+# MP Nagrik Traffic Seva — OCR service dependencies
+# Python 3.10+ recommended (works on 3.9). EasyOCR pulls in torch (large download).
+fastapi==0.110.0
+uvicorn==0.29.0
+opencv-python==4.9.0.80
+easyocr==1.7.1
+pillow==10.3.0
+numpy==1.26.4
+python-multipart==0.0.9

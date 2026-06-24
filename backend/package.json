@@ -1,0 +1,24 @@
+{
+  "name": "mp-traffic-backend",
+  "version": "1.0.0",
+  "description": "MP Nagrik Traffic Seva — API server (Phase 0 demo)",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "init": "node src/db/init.js",
+    "reset": "rm -f data/app.db data/app.db-wal data/app.db-shm && node src/db/init.js"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "puppeteer": "^22.12.1"
+  }
+}

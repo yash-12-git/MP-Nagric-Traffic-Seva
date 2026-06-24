@@ -1,0 +1,47 @@
+# Optional one-command startup for backend + OCR + dashboard.
+# The mobile app is always run separately via `npx expo start`.
+#
+#   docker-compose up --build
+#
+# DEMO ONLY. Challan PDFs use the HTML fallback inside the backend container
+# (Chromium is not installed to keep the image small); run the backend natively
+# if you want true Puppeteer PDFs.
+
+services:
+  ocr:
+    build: ./ocr-service
+    ports:
+      - "8001:8001"
+    environment:
+      - PYTHONUNBUFFERED=1
+
+  backend:
+    build: ./backend
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - OCR_SERVICE_URL=http://ocr:8001
+      - DB_PATH=./data/app.db
+      - UPLOAD_DIR=./uploads
+      - JWT_SECRET=demo-secret-key-change-in-production
+      - DEMO_OTP=123456
+      - PUPPETEER_SKIP_DOWNLOAD=true
+    volumes:
+      - backend_data:/app/data
+      - backend_uploads:/app/uploads
+    depends_on:
+      - ocr
+
+  dashboard:
+    build: ./dashboard
+    ports:
+      - "5173:5173"
+    environment:
+      - BACKEND_URL=http://backend:3001
+    depends_on:
+      - backend
+
+volumes:
+  backend_data:
+  backend_uploads:

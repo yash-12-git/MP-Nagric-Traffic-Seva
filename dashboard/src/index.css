@@ -1,0 +1,7 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html, body, #root { height: 100%; margin: 0; }
+body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f4f6fa; }
+.leaflet-container { z-index: 0; }

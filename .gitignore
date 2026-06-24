@@ -1,0 +1,25 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Env
+.env
+backend/.env
+
+# Python
+ocr-service/.venv/
+**/__pycache__/
+*.pyc
+
+# Database & uploads (demo runtime artifacts)
+backend/data/
+backend/uploads/
+
+# Build output
+dashboard/dist/
+.expo/
+mobile/.expo/
+
+# OS / editor
+.DS_Store
+*.log
