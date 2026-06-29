@@ -20,6 +20,44 @@ function videoLikely(mimetype = '', filename = '') {
   return /video\//.test(mimetype) || /\.(mp4|mov|avi|mkv|webm)$/i.test(filename);
 }
 
+// Turn the OCR service's verification block into a status, a needs-review flag,
+// and a human-readable officer note. Verification is ADVISORY — we keep the
+// citizen's selected violation and never reject here (per product decision):
+//   - NO_DETECTION  : no vehicle OR no person found -> flag for review.
+//   - UNVERIFIED    : detector unavailable/failed   -> flag for review.
+//   - CONFIRMED     : vehicle + person present       -> no flag.
+// Any other violations the detector spotted are appended to the note so the
+// officer can reclassify if needed.
+function summariseVerification(v, vt) {
+  if (!v || v.available === false) {
+    return {
+      status: 'UNVERIFIED',
+      needsReview: true,
+      note: `[auto-verify] Verification unavailable — manual review required. ${v && v.notes ? v.notes : ''}`.trim(),
+    };
+  }
+
+  const noVehicle = !v.vehicle_present;
+  const noPerson = !v.person_present;
+  const others = (v.detected_violations || []).filter((c) => c !== vt.code);
+
+  let status = 'CONFIRMED';
+  let needsReview = false;
+  if (noVehicle || noPerson) {
+    status = 'NO_DETECTION';
+    needsReview = true;
+  } else if (others.length > 0 || v.stated_violation_confirmed === false) {
+    // Scene is valid but the stated violation isn't auto-confirmed / there are
+    // other candidates — surface it but don't block.
+    needsReview = true;
+  }
+
+  const note = `[auto-verify] ${v.notes || 'verification complete.'}` +
+    (others.length ? ` Suggested reclassification: ${others.join(', ')}.` : '');
+
+  return { status, needsReview, note };
+}
+
 // POST /api/cases — submit a new case (multipart/form-data, field "media").
 router.post('/', requireCitizen, upload.single('media'), async (req, res) => {
   try {
@@ -43,8 +81,17 @@ router.post('/', requireCitizen, upload.single('media'), async (req, res) => {
     // 2. Reserve the case number up front so it can be watermarked into the thumbnail.
     const caseNumber = nextCaseNumber();
 
-    // 3. Run OCR (soft dependency — never throws). Pass metadata for the watermark.
-    const ocr = await readPlate(filePath);
+    // 3. Run OCR + visual verification (soft dependency — never throws). The OCR
+    //    service verifies the stated violation against the frame (vehicle/person
+    //    present, violation plausible, other violations) before reading the plate.
+    const ocr = await readPlate(filePath, { violationCode: vt.code });
+
+    // Interpret the verification result. It is ADVISORY: we never block a
+    // submission. We keep the citizen's selected violation, attach what the
+    // detector saw as an officer note, and flag weak/failed verifications.
+    const verification = ocr.verification || { available: false };
+    const { status: verificationStatus, needsReview, note: verificationNote } =
+      summariseVerification(verification, vt);
 
     // 4. Save watermarked thumbnail if the OCR service returned one.
     let thumbnailPath = null;
@@ -77,16 +124,18 @@ router.post('/', requireCitizen, upload.single('media'), async (req, res) => {
           case_number, reporter_id, violation_type_id,
           media_path, media_type, media_hash, thumbnail_path,
           plate_number, plate_confidence, ocr_raw_result,
+          verification_status, verification_result, needs_review,
           vehicle_owner_name, vehicle_owner_address, vehicle_registration_date, vehicle_type,
           latitude, longitude, location_address,
-          status, reporter_note, incident_time
+          status, reporter_note, officer_note, incident_time
         ) VALUES (
           @case_number, @reporter_id, @violation_type_id,
           @media_path, @media_type, @media_hash, @thumbnail_path,
           @plate_number, @plate_confidence, @ocr_raw_result,
+          @verification_status, @verification_result, @needs_review,
           @owner_name, @owner_address, @reg_date, @vehicle_type,
           @latitude, @longitude, @location_address,
-          'PENDING', @reporter_note, @incident_time
+          'PENDING', @reporter_note, @officer_note, @incident_time
         )`
       )
       .run({
@@ -100,6 +149,9 @@ router.post('/', requireCitizen, upload.single('media'), async (req, res) => {
         plate_number: plate,
         plate_confidence: ocr.best_confidence || null,
         ocr_raw_result: JSON.stringify(ocr.raw || {}),
+        verification_status: verificationStatus,
+        verification_result: JSON.stringify(verification || {}),
+        needs_review: needsReview ? 1 : 0,
         owner_name: vahan ? vahan.owner_name : null,
         owner_address: vahan ? vahan.owner_address : null,
         reg_date: vahan ? vahan.registration_date : null,
@@ -108,6 +160,7 @@ router.post('/', requireCitizen, upload.single('media'), async (req, res) => {
         longitude: lng,
         location_address: locationAddress,
         reporter_note: reporter_note || null,
+        officer_note: verificationNote || null,
         incident_time: incident_time || new Date().toISOString(),
       });
 
@@ -117,7 +170,12 @@ router.post('/', requireCitizen, upload.single('media'), async (req, res) => {
     db.prepare('UPDATE users SET total_reports = total_reports + 1 WHERE id = ?').run(req.auth.id);
 
     // 9. Audit.
-    audit(caseId, 'user', req.auth.id, 'SUBMITTED', { plate, confidence: ocr.best_confidence });
+    audit(caseId, 'user', req.auth.id, 'SUBMITTED', {
+      plate,
+      confidence: ocr.best_confidence,
+      verification_status: verificationStatus,
+      needs_review: needsReview,
+    });
 
     const message = plate
       ? `Case submitted. Plate detected: ${plate}`
@@ -132,6 +190,13 @@ router.post('/', requireCitizen, upload.single('media'), async (req, res) => {
         plate_number: plate,
         plate_confidence: ocr.best_confidence || 0,
         owner_name: vahan ? vahan.owner_name : null,
+        verification: {
+          status: verificationStatus,
+          needs_review: needsReview,
+          vehicle_present: !!verification.vehicle_present,
+          person_present: !!verification.person_present,
+          detected_violations: verification.detected_violations || [],
+        },
         message,
       },
     });

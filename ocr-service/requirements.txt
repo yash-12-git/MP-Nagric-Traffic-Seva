@@ -4,6 +4,22 @@ fastapi==0.110.0
 uvicorn==0.29.0
 opencv-python==4.9.0.80
 easyocr==1.7.1
+# Object detection for violation verification (vehicle/person/triple-riding) AND,
+# optionally, license-plate ROI detection + helmet detection. Reuses the torch that
+# easyocr already pulls in; downloads yolov8n.pt on first run.
+#
+# Accuracy is improved by dropping in extra single-purpose weights (all optional —
+# the service falls back gracefully if absent):
+#   YOLO_PLATE_WEIGHTS   path to a license-plate detector  -> crop-then-OCR (biggest win)
+#   YOLO_HELMET_WEIGHTS  path to a helmet/no-helmet model  -> auto-decide NO_HELMET
+#   YOLO_WEIGHTS         swap yolov8n -> yolov8s/m or yolo11 for better recall
+#   OCR_FRAMES           how many sharp video frames to OCR-and-vote (default 3)
+ultralytics==8.2.103
 pillow==10.3.0
 numpy==1.26.4
 python-multipart==0.0.9
+
+# Optional stronger plate recognizer (uncomment to use instead of / alongside EasyOCR).
+# PaddleOCR reads embossed/HSRP plates noticeably better than generic EasyOCR.
+# paddleocr==2.7.3
+# paddlepaddle==2.6.1

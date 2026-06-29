@@ -3,5 +3,11 @@
 @tailwind utilities;
 
 html, body, #root { height: 100%; margin: 0; }
-body { font-family: 'Segoe UI', system-ui, -apple-system, sans-serif; background: #f4f6fa; }
+body {
+  font-family: 'Mukta', system-ui, -apple-system, sans-serif;
+  background: #F4EEE3;
+  color: #23201A;
+  -webkit-font-smoothing: antialiased;
+}
+.font-serif { font-family: 'Source Serif 4', Georgia, serif; }
 .leaflet-container { z-index: 0; }

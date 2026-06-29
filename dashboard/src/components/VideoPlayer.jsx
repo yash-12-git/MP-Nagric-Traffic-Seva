@@ -7,7 +7,7 @@ export default function VideoPlayer({ c }) {
   const src = c.media_path ? mediaUrl(c.media_path) : null;
 
   return (
-    <div className="bg-black rounded-lg overflow-hidden">
+    <div className="bg-ink rounded-xl overflow-hidden border border-line">
       {isVideo ? (
         <video src={src} controls poster={thumbnailUrl(c.id)} className="w-full max-h-[420px] bg-black">
           Your browser does not support video playback.

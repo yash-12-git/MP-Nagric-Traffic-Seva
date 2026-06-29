@@ -25,14 +25,17 @@ async def ocr_plate(
     case_number: str = Form(None),
     gps: str = Form(None),
     timestamp: str = Form(None),
+    # Stated violation code (e.g. 'NO_HELMET') — drives the YOLO verification step.
+    violation_code: str = Form(None),
 ):
     """Read a plate from the uploaded media. Never 500s on bad media — returns an
     empty-plate result so the backend can fall back to manual officer entry."""
     try:
         contents = await file.read()
-        print(f"[ocr] received {file.filename} ({len(contents)} bytes)")
+        print(f"[ocr] received {file.filename} ({len(contents)} bytes) violation={violation_code}")
         result = plate_reader.process(
-            contents, file.filename, case_number=case_number, gps=gps, timestamp=timestamp
+            contents, file.filename, case_number=case_number, gps=gps,
+            timestamp=timestamp, violation_code=violation_code,
         )
         print(f"[ocr] -> best_plate={result.get('best_plate')} "
               f"confidence={result.get('best_confidence')} "
@@ -49,6 +52,7 @@ async def ocr_plate(
                 "frame_extracted": False,
                 "processing_time_ms": 0,
                 "thumbnail_b64": None,
+                "verification": {"available": False, "notes": f"OCR failed: {exc}."},
                 "message": f"OCR failed: {exc}. Officer manual entry required.",
             },
         )

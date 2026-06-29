@@ -4,9 +4,13 @@ import {
 } from 'react-native';
 import { api } from '../services/api';
 import { useAuth } from '../App';
+import { useLang } from '../i18n';
+import { colors, serif } from '../theme';
+import TricolorStrip from '../components/TricolorStrip';
 
 export default function LoginScreen() {
   const { signIn } = useAuth();
+  const { t, lang, toggle } = useLang();
   const [phone, setPhone] = useState('9876543210');
   const [otp, setOtp] = useState('');
   const [stage, setStage] = useState('phone'); // 'phone' | 'otp'
@@ -15,7 +19,7 @@ export default function LoginScreen() {
 
   const sendOtp = async () => {
     if (phone.replace(/\D/g, '').length < 10) {
-      Alert.alert('Invalid number', 'Enter a valid 10-digit phone number.');
+      Alert.alert(t('invalid_number'), t('invalid_number_msg'));
       return;
     }
     setBusy(true);
@@ -24,7 +28,7 @@ export default function LoginScreen() {
       setDemoOtp(r.data.data.demo_otp || '123456');
       setStage('otp');
     } catch (e) {
-      Alert.alert('Error', e.response?.data?.error || 'Could not send OTP. Is the backend running?');
+      Alert.alert(t('error'), e.response?.data?.error || 'Could not send OTP. Is the backend running?');
     } finally { setBusy(false); }
   };
 
@@ -34,77 +38,93 @@ export default function LoginScreen() {
       const r = await api.verifyOtp(phone, otp, 'Rahul Sharma');
       await signIn(r.data.data.token, r.data.data.user);
     } catch (e) {
-      Alert.alert('Error', e.response?.data?.error || 'Invalid OTP');
+      Alert.alert(t('error'), e.response?.data?.error || 'Invalid OTP');
     } finally { setBusy(false); }
   };
 
   return (
     <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.container}>
+      <TouchableOpacity style={styles.langToggle} onPress={toggle}>
+        <Text style={styles.langText}>{lang === 'hi' ? 'English' : 'हिंदी'}</Text>
+      </TouchableOpacity>
+
       <View style={styles.header}>
-        <Text style={styles.logo}>🛡️</Text>
-        <Text style={styles.title}>MP Nagrik Traffic Seva</Text>
-        <Text style={styles.subtitle}>Sign in to report violations</Text>
+        <View style={styles.emblem}><Text style={styles.emblemIcon}>🛡️</Text></View>
+        <Text style={styles.title}>नागरिक ट्रैफिक सेवा</Text>
+        <Text style={styles.titleSub}>MP Nagrik Traffic Seva</Text>
+        <Text style={styles.subtitle}>{t('login_subtitle')}</Text>
       </View>
 
       <View style={styles.card}>
-        <Text style={styles.label}>Phone Number</Text>
-        <View style={styles.phoneRow}>
-          <Text style={styles.prefix}>+91</Text>
-          <TextInput
-            style={styles.input}
-            keyboardType="phone-pad"
-            value={phone}
-            onChangeText={setPhone}
-            editable={stage === 'phone'}
-            placeholder="98765 43210"
-            maxLength={10}
-          />
-        </View>
-
-        {stage === 'phone' ? (
-          <TouchableOpacity style={styles.btn} onPress={sendOtp} disabled={busy}>
-            <Text style={styles.btnText}>{busy ? 'Sending…' : 'Send OTP'}</Text>
-          </TouchableOpacity>
-        ) : (
-          <>
-            <Text style={[styles.label, { marginTop: 16 }]}>Enter OTP</Text>
+        <TricolorStrip style={styles.cardStrip} />
+        <View style={styles.cardBody}>
+          <Text style={styles.label}>{t('phone_number')}</Text>
+          <View style={styles.phoneRow}>
+            <Text style={styles.prefix}>+91</Text>
             <TextInput
-              style={[styles.input, styles.otpInput]}
-              keyboardType="number-pad"
-              value={otp}
-              onChangeText={setOtp}
-              placeholder="------"
-              maxLength={6}
-              autoFocus
+              style={styles.input}
+              keyboardType="phone-pad"
+              value={phone}
+              onChangeText={setPhone}
+              editable={stage === 'phone'}
+              placeholder="98765 43210"
+              placeholderTextColor={colors.faint}
+              maxLength={10}
             />
-            <Text style={styles.demoHint}>(Demo OTP: {demoOtp || '123456'})</Text>
-            <TouchableOpacity style={styles.btn} onPress={verify} disabled={busy}>
-              <Text style={styles.btnText}>{busy ? 'Verifying…' : 'Verify & Continue'}</Text>
+          </View>
+
+          {stage === 'phone' ? (
+            <TouchableOpacity style={styles.btn} onPress={sendOtp} disabled={busy}>
+              <Text style={styles.btnText}>{busy ? t('sending') : t('send_otp')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity onPress={() => setStage('phone')}>
-              <Text style={styles.changeNo}>Change number</Text>
-            </TouchableOpacity>
-          </>
-        )}
+          ) : (
+            <>
+              <Text style={[styles.label, { marginTop: 16 }]}>{t('enter_otp')}</Text>
+              <TextInput
+                style={[styles.input, styles.otpInput]}
+                keyboardType="number-pad"
+                value={otp}
+                onChangeText={setOtp}
+                placeholder="------"
+                placeholderTextColor={colors.faint}
+                maxLength={6}
+                autoFocus
+              />
+              <Text style={styles.demoHint}>({t('demo_otp')}: {demoOtp || '123456'})</Text>
+              <TouchableOpacity style={styles.btn} onPress={verify} disabled={busy}>
+                <Text style={styles.btnText}>{busy ? t('verifying') : t('verify_continue')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => setStage('phone')}>
+                <Text style={styles.changeNo}>{t('change_number')}</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
       </View>
     </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0b3d91', justifyContent: 'center', padding: 24 },
+  container: { flex: 1, backgroundColor: colors.navy, justifyContent: 'center', padding: 24 },
+  langToggle: { position: 'absolute', top: 56, right: 20, borderWidth: 1, borderColor: 'rgba(255,255,255,0.4)', borderRadius: 20, paddingHorizontal: 14, paddingVertical: 6 },
+  langText: { color: '#fff', fontWeight: '600', fontSize: 13 },
   header: { alignItems: 'center', marginBottom: 24 },
-  logo: { fontSize: 56 },
-  title: { color: '#fff', fontSize: 22, fontWeight: '800', marginTop: 8 },
-  subtitle: { color: '#bcd', marginTop: 4 },
-  card: { backgroundColor: '#fff', borderRadius: 16, padding: 20 },
-  label: { fontSize: 13, color: '#555', marginBottom: 6, fontWeight: '600' },
-  phoneRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: '#ddd', borderRadius: 10 },
-  prefix: { paddingHorizontal: 12, fontSize: 16, color: '#333', fontWeight: '600' },
-  input: { flex: 1, paddingVertical: 12, paddingHorizontal: 8, fontSize: 16 },
-  otpInput: { borderWidth: 1, borderColor: '#ddd', borderRadius: 10, letterSpacing: 8, textAlign: 'center', fontSize: 22 },
-  demoHint: { color: '#888', fontSize: 12, marginTop: 6, textAlign: 'center' },
-  btn: { backgroundColor: '#ff6b00', borderRadius: 10, paddingVertical: 14, alignItems: 'center', marginTop: 16 },
+  emblem: { width: 76, height: 76, borderRadius: 38, backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  emblemIcon: { fontSize: 40 },
+  title: { fontFamily: serif, color: '#fff', fontSize: 22, fontWeight: '700', marginTop: 12 },
+  titleSub: { color: colors.navySoft, fontSize: 12, marginTop: 2 },
+  subtitle: { color: colors.navySoft, marginTop: 8, fontSize: 13 },
+  card: { backgroundColor: colors.paper, borderRadius: 18, overflow: 'hidden', borderWidth: 1, borderColor: colors.border },
+  cardStrip: { height: 4 },
+  cardBody: { padding: 20 },
+  label: { fontSize: 13, color: colors.muted, marginBottom: 6, fontWeight: '600' },
+  phoneRow: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderColor: colors.borderInput, borderRadius: 10, backgroundColor: '#fff' },
+  prefix: { paddingHorizontal: 12, fontSize: 16, color: colors.ink, fontWeight: '600' },
+  input: { flex: 1, paddingVertical: 12, paddingHorizontal: 8, fontSize: 16, color: colors.ink },
+  otpInput: { borderWidth: 1, borderColor: colors.borderInput, borderRadius: 10, letterSpacing: 8, textAlign: 'center', fontSize: 22, backgroundColor: '#fff' },
+  demoHint: { color: colors.muted2, fontSize: 12, marginTop: 6, textAlign: 'center' },
+  btn: { backgroundColor: colors.saffron, borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginTop: 16 },
   btnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
-  changeNo: { color: '#0b3d91', textAlign: 'center', marginTop: 12 },
+  changeNo: { color: colors.navy, textAlign: 'center', marginTop: 12, fontWeight: '600' },
 });

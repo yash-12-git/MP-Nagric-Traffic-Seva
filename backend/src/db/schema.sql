@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS cases (
   plate_confidence REAL,            -- 0.0 to 1.0
   ocr_raw_result TEXT,              -- full JSON from OCR service
 
+  -- Visual verification (YOLO) — advisory, never blocks submission.
+  verification_status VARCHAR(20),  -- CONFIRMED | UNVERIFIED | NO_DETECTION | SKIPPED
+  verification_result TEXT,         -- full JSON from the verifier
+  needs_review INTEGER DEFAULT 0,   -- 1 = weak/failed verification, officer should check
+
   -- VAHAN mock result
   vehicle_owner_name VARCHAR(100),
   vehicle_owner_address TEXT,

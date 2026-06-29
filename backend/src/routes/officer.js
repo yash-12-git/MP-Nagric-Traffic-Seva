@@ -49,6 +49,7 @@ router.get('/cases', requireOfficer, (req, res) => {
         `SELECT c.id, c.case_number, c.status, c.plate_number, c.plate_confidence,
                 c.media_type, c.thumbnail_path, c.location_address, c.latitude, c.longitude,
                 c.submitted_at, c.incident_time, c.vehicle_owner_name,
+                c.verification_status, c.needs_review,
                 vt.label_en AS violation_label, vt.code AS violation_code, vt.fine_amount
          FROM cases c
          JOIN violation_types vt ON vt.id = c.violation_type_id

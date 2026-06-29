@@ -9,7 +9,7 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const API_BASE_URL = 'http://192.168.1.3:3001'; // DEMO ONLY — LAN IP so Expo Go on a phone can reach the backend. Use 'http://localhost:3001' for the web preview.
+export const API_BASE_URL = 'http://10.176.20.46:3001'; // DEMO ONLY — LAN IP so Expo Go on a phone can reach the backend. Use 'http://localhost:3001' for the web preview.
 
 const TOKEN_KEY = 'mp_citizen_token';
 

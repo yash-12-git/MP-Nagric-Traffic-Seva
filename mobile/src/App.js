@@ -6,12 +6,15 @@ import { Text } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
 
 import { api, getToken, setToken } from './services/api';
+import { LanguageProvider, useLang } from './i18n';
+import { colors } from './theme';
 import SplashScreen from './screens/SplashScreen';
 import LoginScreen from './screens/LoginScreen';
 import HomeScreen from './screens/HomeScreen';
 import CaptureScreen from './screens/CaptureScreen';
 import SubmitScreen from './screens/SubmitScreen';
 import MyCasesScreen from './screens/MyCasesScreen';
+import RewardsScreen from './screens/RewardsScreen';
 import ProfileScreen from './screens/ProfileScreen';
 
 // --- Auth context ---
@@ -22,31 +25,37 @@ const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
 function tabIcon(emoji) {
-  return ({ focused }) => <Text style={{ fontSize: 20, opacity: focused ? 1 : 0.5 }}>{emoji}</Text>;
+  return ({ focused }) => <Text style={{ fontSize: 19, opacity: focused ? 1 : 0.55 }}>{emoji}</Text>;
 }
 
 function HomeTabs() {
+  const { t } = useLang();
   return (
     <Tab.Navigator
       screenOptions={{
         headerShown: false,
-        tabBarActiveTintColor: '#ff6b00',
-        tabBarLabelStyle: { fontSize: 11 },
+        tabBarActiveTintColor: colors.navy,
+        tabBarInactiveTintColor: '#a59c8a',
+        tabBarLabelStyle: { fontSize: 10, fontWeight: '600' },
+        tabBarStyle: { backgroundColor: colors.paperLight, borderTopColor: colors.border },
       }}
     >
       <Tab.Screen name="HomeTab" component={HomeScreen}
-        options={{ title: 'Home', tabBarIcon: tabIcon('🏠') }} />
+        options={{ title: t('tab_home'), tabBarIcon: tabIcon('🏠') }} />
       <Tab.Screen name="MyCasesTab" component={MyCasesScreen}
-        options={{ title: 'My Reports', tabBarIcon: tabIcon('📋') }} />
+        options={{ title: t('tab_reports'), tabBarIcon: tabIcon('🧾') }} />
+      <Tab.Screen name="RewardsTab" component={RewardsScreen}
+        options={{ title: t('tab_rewards'), tabBarIcon: tabIcon('⭐') }} />
       <Tab.Screen name="ProfileTab" component={ProfileScreen}
-        options={{ title: 'Profile', tabBarIcon: tabIcon('👤') }} />
+        options={{ title: t('tab_profile'), tabBarIcon: tabIcon('👤') }} />
     </Tab.Navigator>
   );
 }
 
-export default function App() {
+function Navigation() {
   const [booting, setBooting] = useState(true);
   const [user, setUser] = useState(null);
+  const { ready } = useLang();
 
   const refreshUser = async () => {
     try {
@@ -77,7 +86,7 @@ export default function App() {
       <StatusBar style="light" />
       <NavigationContainer>
         <Stack.Navigator screenOptions={{ headerShown: false }}>
-          {booting ? (
+          {(booting || !ready) ? (
             <Stack.Screen name="Splash" component={SplashScreen} />
           ) : !user ? (
             <Stack.Screen name="Login" component={LoginScreen} />
@@ -86,11 +95,19 @@ export default function App() {
               <Stack.Screen name="Home" component={HomeTabs} />
               <Stack.Screen name="Capture" component={CaptureScreen} />
               <Stack.Screen name="Submit" component={SubmitScreen}
-                options={{ headerShown: true, title: 'Submit Report', headerTintColor: '#0b3d91' }} />
+                options={{ headerShown: true, title: '', headerTintColor: colors.navy, headerStyle: { backgroundColor: colors.paper }, headerShadowVisible: false }} />
             </>
           )}
         </Stack.Navigator>
       </NavigationContainer>
     </AuthContext.Provider>
+  );
+}
+
+export default function App() {
+  return (
+    <LanguageProvider>
+      <Navigation />
+    </LanguageProvider>
   );
 }

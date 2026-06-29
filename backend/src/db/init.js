@@ -19,6 +19,21 @@ async function run() {
   db.exec(schema);
   console.log('[init] schema applied');
 
+  // 1b. Migrations for DBs created before a column existed. CREATE TABLE IF NOT
+  // EXISTS won't add new columns, so add them here (idempotent — skip if present).
+  const caseCols = new Set(db.prepare('PRAGMA table_info(cases)').all().map((c) => c.name));
+  const addColumns = [
+    ['verification_status', 'VARCHAR(20)'],
+    ['verification_result', 'TEXT'],
+    ['needs_review', 'INTEGER DEFAULT 0'],
+  ];
+  for (const [name, type] of addColumns) {
+    if (!caseCols.has(name)) {
+      db.exec(`ALTER TABLE cases ADD COLUMN ${name} ${type}`);
+      console.log(`[init] migrated: added cases.${name}`);
+    }
+  }
+
   // 2. Reference seed (violation types, demo citizen)
   const seed = fs.readFileSync(path.join(__dirname, 'seed.sql'), 'utf8');
   db.exec(seed);

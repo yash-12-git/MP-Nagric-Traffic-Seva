@@ -13,9 +13,17 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+import os
+
+import violation_verifier
+import plate_detector
+
 # Indian number plate pattern: 2 letters + 2 digits + 1-2 letters + 4 digits
 #   e.g. MP04AB1234  /  MP04A1234
 PLATE_PATTERN = re.compile(r"[A-Z]{2}\d{1,2}[A-Z]{1,2}\d{4}")
+
+# How many sharp frames to OCR-and-vote across for a video (1 = old behaviour).
+_OCR_FRAMES = max(1, int(os.environ.get("OCR_FRAMES", "3")))
 
 _reader = None
 
@@ -54,6 +62,57 @@ def extract_best_frame(video_path):
 
     cap.release()
     return best_frame
+
+
+def extract_best_frames(video_path, k=3):
+    """Extract the k sharpest frames from a video (by Laplacian variance), sharpest
+    first. Multi-frame OCR voting recovers plates that a single frame blurs or
+    occludes. Falls back to [] if the video can't be read."""
+    cap = cv2.VideoCapture(video_path)
+    scored = []
+    frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) or 0
+    step = max(1, 10)
+    indices = range(0, frame_count, step) if frame_count > 0 else range(0, 300, step)
+
+    for i in indices:
+        cap.set(cv2.CAP_PROP_POS_FRAMES, i)
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        sharpness = cv2.Laplacian(gray, cv2.CV_64F).var()
+        scored.append((sharpness, frame))
+
+    cap.release()
+    scored.sort(key=lambda t: t[0], reverse=True)
+    return [f for _, f in scored[:k]]
+
+
+def load_frames(file_bytes, filename):
+    """Load media as (frames, frame_extracted). For an image, frames is a 1-element
+    list; for a video, the top-`_OCR_FRAMES` sharpest frames (sharpest first)."""
+    lower = (filename or "").lower()
+    is_video = lower.endswith((".mp4", ".mov", ".avi", ".mkv", ".webm"))
+
+    if is_video:
+        import tempfile
+        import os as _os
+        suffix = _os.path.splitext(lower)[1] or ".mp4"
+        tf = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        try:
+            tf.write(file_bytes)
+            tf.close()
+            frames = extract_best_frames(tf.name, k=_OCR_FRAMES)
+            return frames, True
+        finally:
+            try:
+                _os.unlink(tf.name)
+            except OSError:
+                pass
+
+    arr = np.frombuffer(file_bytes, np.uint8)
+    img = cv2.imdecode(arr, cv2.IMREAD_COLOR)
+    return ([img] if img is not None else []), False
 
 
 def load_image(file_bytes, filename):
@@ -245,26 +304,59 @@ def _reading_order(results):
     return flat
 
 
-def read_plate(image):
-    """Read Indian plate candidates from a frame.
+_CLAHE = None
 
-    Handles single-line AND two-line plates (most motorcycles / HSRP plates), and
-    embossed plates with holographic overlays, by:
-      1. OCR-ing the frame at several scales with a plate-character allowlist;
-      2. building candidates from contiguous runs of 1-3 boxes in reading order, so a
-         plate split across boxes/lines ("RJ41S" + "H7917") is reassembled without
-         pulling in an overlapping hologram misread;
-      3. matching the plate regex, then canonicalising with position-aware confusion
-         correction (Z->7, A->4, ...). Best by confidence wins.
-    Officer-in-the-loop reviews every plate, and the confidence is surfaced.
+
+def _clahe():
+    global _CLAHE
+    if _CLAHE is None:
+        _CLAHE = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    return _CLAHE
+
+
+def _crop_variants(crop_bgr, min_h=110):
+    """Yield (label, gray) preprocessed variants of a tight plate crop for OCR: an
+    upscaled grayscale plus a CLAHE local-contrast version. Upscaling small crops is
+    what makes embossed/HSRP characters legible to EasyOCR; CLAHE lifts low-contrast
+    plates shot at night or against glare."""
+    if crop_bgr is None or getattr(crop_bgr, "size", 0) == 0:
+        return
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY) if crop_bgr.ndim == 3 else crop_bgr
+    h, w = gray.shape[:2]
+    if h < min_h:
+        scale = min_h / h
+        gray = cv2.resize(gray, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_CUBIC)
+    yield "crop", gray
+    try:
+        yield "crop-clahe", _clahe().apply(gray)
+    except Exception:  # noqa: BLE001 — CLAHE is best-effort
+        pass
+
+
+def read_plate(frames):
+    """Read Indian plate candidates from one frame or several (video voting).
+
+    ALPR-style pipeline:
+      1. DETECT — a license-plate detector (plate_detector) crops the plate ROI so OCR
+         sees a tight, upscaled plate instead of the whole noisy frame. If no detector
+         is configured we fall back to whole-frame multi-scale OCR (previous behaviour).
+      2. READ — OCR each crop (and/or the frame) at several scales with a plate-char
+         allowlist, building candidates from contiguous runs of 1-3 boxes in reading
+         order so a two-line plate ("RJ41S" + "H7917") is reassembled.
+      3. CANONICALISE — regex match then position-aware confusion correction (Z->7 ...).
+
+    Candidates from ROI crops and from multiple video frames *vote*; the best by
+    completeness, then votes, then confidence wins. Officer reviews every plate.
     """
+    if frames is None:
+        return []
+    if not isinstance(frames, list):
+        frames = [frames]
+
     reader = get_reader()
+    votes, conf = {}, {}   # per distinct plate: total votes and best confidence
 
-    # Per distinct plate: how many candidates produced it (votes) and its best conf.
-    votes = {}
-    conf = {}
-
-    def add(text, confidence):
+    def add(text, confidence, weight):
         cleaned = _clean(text)
         cand = None
         for variant in _normalise_variants(cleaned):   # exact substring match first
@@ -275,29 +367,48 @@ def read_plate(image):
         if cand is None:                                # else try structural fixup
             cand = _canonicalise(cleaned)
         if cand:
-            votes[cand] = votes.get(cand, 0) + 1
+            votes[cand] = votes.get(cand, 0) + weight
             conf[cand] = max(conf.get(cand, 0.0), confidence)
 
-    for _label, variant in _ocr_passes(image):
-        results = reader.readtext(variant, allowlist=PLATE_ALLOWLIST)
-        if not results:
+    def run_passes(passes, weight):
+        for _label, variant in passes:
+            results = reader.readtext(variant, allowlist=PLATE_ALLOWLIST)
+            if not results:
+                continue
+            boxes = _reading_order(results)   # [(text, conf), ...] logo tokens dropped
+            n = len(boxes)
+            # Candidates = contiguous runs of 1-3 boxes (a plate spans at most two
+            # lines, each line at most a couple of OCR boxes).
+            for i in range(n):
+                for size in (1, 2, 3):
+                    if i + size > n:
+                        break
+                    chunk = boxes[i:i + size]
+                    joined = "".join(_clean(t) for (t, _) in chunk)
+                    mean_conf = sum(c for (_, c) in chunk) / size
+                    add(joined, mean_conf, weight)
+
+    for frame in frames:
+        if frame is None:
             continue
-        boxes = _reading_order(results)   # [(text, conf), ...] logo tokens dropped
-        n = len(boxes)
-        # Candidates = contiguous runs of 1-3 boxes (a plate spans at most two lines,
-        # each line at most a couple of OCR boxes).
-        for i in range(n):
-            for size in (1, 2, 3):
-                if i + size > n:
-                    break
-                chunk = boxes[i:i + size]
-                joined = "".join(_clean(t) for (t, _) in chunk)
-                mean_conf = sum(c for (_, c) in chunk) / size
-                add(joined, mean_conf)
+        rois = plate_detector.detect(frame)   # None => detector unavailable
+        used_roi = False
+        if rois:
+            for roi in rois:
+                cimg = plate_detector.crop(frame, roi["bbox"])
+                if cimg is None:
+                    continue
+                used_roi = True
+                # ROI crops are high-signal — weight their votes higher than the
+                # whole-frame fallback so a clean crop read wins ties.
+                run_passes(_crop_variants(cimg), weight=2)
+        # Whole-frame OCR fallback: always when no detector / no ROI, and as a safety
+        # net when ROI crops produced nothing.
+        if not used_roi or not votes:
+            run_passes(_ocr_passes(frame), weight=1)
 
     # Rank: prefer the most complete plate (a full 10-char plate beats a truncated
-    # 9-char read that dropped a character), then recurrence across scales/positions,
-    # then OCR confidence.
+    # read), then recurrence across crops/scales/frames, then OCR confidence.
     plates = [{"text": p, "confidence": float(conf[p]), "votes": votes[p], "bbox": None}
               for p in votes]
     plates.sort(key=lambda p: (len(p["text"]), p["votes"], p["confidence"]), reverse=True)
@@ -350,12 +461,18 @@ def make_watermarked_thumbnail(image, case_number=None, gps=None, timestamp=None
     return base64.b64encode(buf.getvalue()).decode("ascii")
 
 
-def process(file_bytes, filename, case_number=None, gps=None, timestamp=None):
-    """Full pipeline: load -> read plate -> watermark thumbnail. Returns a dict."""
-    start = time.time()
-    image, frame_extracted = load_image(file_bytes, filename)
+def process(file_bytes, filename, case_number=None, gps=None, timestamp=None,
+            violation_code=None):
+    """Full pipeline: load -> verify violation -> read plate -> watermark. Returns a dict.
 
-    if image is None:
+    `violation_code` is the violation the citizen selected (e.g. 'NO_HELMET'); when
+    given we run the YOLO verifier on the same frame and include a `verification`
+    block. Verification is advisory and never blocks plate reading."""
+    start = time.time()
+    frames, frame_extracted = load_frames(file_bytes, filename)
+    primary = frames[0] if frames else None   # sharpest frame for verify + thumbnail
+
+    if primary is None:
         return {
             "plates": [],
             "best_plate": None,
@@ -363,11 +480,20 @@ def process(file_bytes, filename, case_number=None, gps=None, timestamp=None):
             "frame_extracted": frame_extracted,
             "processing_time_ms": int((time.time() - start) * 1000),
             "thumbnail_b64": None,
+            "verification": {
+                "available": False,
+                "notes": "Could not decode media — verification skipped.",
+            },
             "message": "Could not decode media. Officer manual entry required.",
         }
 
-    plates = read_plate(image)
-    thumb = make_watermarked_thumbnail(image, case_number, gps, timestamp)
+    # Verify the scene against the stated violation BEFORE reading the plate, on the
+    # sharpest decoded frame (no second decode / upload).
+    verification = violation_verifier.verify(primary, violation_code)
+
+    # Read the plate across all sharp frames (video) and vote.
+    plates = read_plate(frames)
+    thumb = make_watermarked_thumbnail(primary, case_number, gps, timestamp)
 
     best = plates[0] if plates else None
     result = {
@@ -377,6 +503,7 @@ def process(file_bytes, filename, case_number=None, gps=None, timestamp=None):
         "frame_extracted": frame_extracted,
         "processing_time_ms": int((time.time() - start) * 1000),
         "thumbnail_b64": thumb,
+        "verification": verification,
     }
     if not plates:
         result["message"] = "No plate detected. Officer manual entry required."

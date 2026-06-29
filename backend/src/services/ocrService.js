@@ -17,17 +17,21 @@ const OCR_TIMEOUT_MS = 60000;
  * Never throws — on any failure it returns a safe "no plate" result.
  *
  * @param {string} filePath absolute path to the uploaded media
- * @returns {Promise<object>} { best_plate, best_confidence, plates, raw, error? }
+ * @param {object} [opts]
+ * @param {string} [opts.violationCode] stated violation (e.g. 'NO_HELMET') for the
+ *   YOLO verification step.
+ * @returns {Promise<object>} { best_plate, best_confidence, plates, verification, raw, error? }
  */
-async function readPlate(filePath) {
+async function readPlate(filePath, opts = {}) {
   try {
     if (!fs.existsSync(filePath)) {
       throw new Error(`file not found: ${filePath}`);
     }
     const form = new FormData();
     form.append('file', fs.createReadStream(filePath));
+    if (opts.violationCode) form.append('violation_code', opts.violationCode);
 
-    console.log(`[ocr] sending ${filePath} -> ${OCR_SERVICE_URL}/ocr/plate`);
+    console.log(`[ocr] sending ${filePath} -> ${OCR_SERVICE_URL}/ocr/plate (violation=${opts.violationCode || '-'})`);
     const res = await axios.post(`${OCR_SERVICE_URL}/ocr/plate`, form, {
       headers: form.getHeaders(),
       timeout: OCR_TIMEOUT_MS,
@@ -41,6 +45,7 @@ async function readPlate(filePath) {
       best_plate: data.best_plate || null,
       best_confidence: data.best_confidence || 0,
       plates: data.plates || [],
+      verification: data.verification || null,
       frame_extracted: data.frame_extracted || false,
       processing_time_ms: data.processing_time_ms || 0,
       raw: data,
@@ -52,6 +57,7 @@ async function readPlate(filePath) {
       best_plate: null,
       best_confidence: 0,
       plates: [],
+      verification: { available: false, notes: 'OCR/verification service unavailable.' },
       frame_extracted: false,
       processing_time_ms: 0,
       error: err.message,
